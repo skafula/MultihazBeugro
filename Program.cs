@@ -7,43 +7,46 @@ internal class Program
     {
         string domainBasePath = @"C:\Users\skafula\Desktop\Domain\DomainPath\Test";
         string subdomainBasePath = @"C:\Users\skafula\Desktop\Subdomain\SubPath\Test";
+        FileManager fileManager = new FileManager(new CatalogManager(domainBasePath), new CatalogManager(subdomainBasePath));
+        fileManager.SyncFiles();
 
-        CatalogManager domainCatalogManager = new CatalogManager(domainBasePath);
-        CatalogManager subdomainCatalogManager = new CatalogManager(subdomainBasePath);
+        //CatalogManager domainCatalogManager = new CatalogManager(domainBasePath);
+        //CatalogManager subdomainCatalogManager = new CatalogManager(subdomainBasePath);
 
-        foreach (CurrentFile file in domainCatalogManager.CurrentFilesList)
-        {
-            Console.WriteLine($"FileName: {file.FileName}, CreationDate: {file.CreationDate}, FileSize: {file.FileSize}, LastModifiedDate: {file.LastModifiedDate}, RelativePath: {file.RelativePath}\n");
-        }
-        foreach (CurrentFile file in subdomainCatalogManager.CurrentFilesList)
-        {
-            Console.WriteLine($"FileName: {file.FileName}, CreationDate: {file.CreationDate}, FileSize: {file.FileSize}, LastModifiedDate: {file.LastModifiedDate}, RelativePath: {file.RelativePath}\n");
-        }
+        //foreach (CurrentFile file in domainCatalogManager.CurrentFilesList)
+        //{
+        //    Console.WriteLine($"FileName: {file.FileName}, CreationDate: {file.CreationDate}, FileSize: {file.FileSize}, LastModifiedDate: {file.LastModifiedDate}, RelativePath: {file.RelativePath}\n");
+        //}
+        //foreach (CurrentFile file in subdomainCatalogManager.CurrentFilesList)
+        //{
+        //    Console.WriteLine($"FileName: {file.FileName}, CreationDate: {file.CreationDate}, FileSize: {file.FileSize}, LastModifiedDate: {file.LastModifiedDate}, RelativePath: {file.RelativePath}\n");
+        //}
     }
     #region FileManager class for doing final operations with file + catalog/log update
 
     public class FileManager
     {
-        private ICatalogManager _domainCatalogManager;
-        private ICatalogManager _subdomainCatalogManager;
+        private CatalogManager _domainCatalogManager;
+        private CatalogManager _subdomainCatalogManager;
         private string _logPath;
 
-        public FileManager(ICatalogManager domainCatalogManager, ICatalogManager subdomainCatalogManager)
+        public FileManager(CatalogManager domainCatalogManager, CatalogManager subdomainCatalogManager)
         {
             _domainCatalogManager = domainCatalogManager;
             _subdomainCatalogManager = subdomainCatalogManager;
             _logPath = Path.Combine(subdomainCatalogManager.BasePath, "log.txt");
         }
         //Makes operation/reverse operation to check differences and call neccessery methods
-        public void SyncFiles(List<CurrentFile> domainList, List<CurrentFile> subdomainList)
+        public void SyncFiles()
         {
-            foreach (CurrentFile domainFile in domainList)
+            foreach (CurrentFile domainFile in _domainCatalogManager.CurrentFilesList)
             {
-                CurrentFile? correspondingSubdomainFile = subdomainList
+                CurrentFile? correspondingSubdomainFile = _subdomainCatalogManager.CurrentFilesList
                     .FirstOrDefault(sdFile => sdFile.FileName == domainFile.FileName && sdFile.RelativePath == domainFile.RelativePath);
 
                 if(correspondingSubdomainFile == null)
                 {
+                    
                     CreateFile(domainFile);
                 }
                 else if (correspondingSubdomainFile.LastModifiedDate != domainFile.LastModifiedDate)
@@ -53,9 +56,9 @@ internal class Program
             }
 
             //Reverse checking if a file has been deleted
-            foreach (CurrentFile subdomainFile in subdomainList)
+            foreach (CurrentFile subdomainFile in _subdomainCatalogManager.CurrentFilesList)
             {
-                CurrentFile? correspondingDomainFile = domainList
+                CurrentFile? correspondingDomainFile = _domainCatalogManager.CurrentFilesList
                     .FirstOrDefault(dFile => dFile.FileName == subdomainFile.FileName && dFile.RelativePath == subdomainFile.RelativePath);
 
                 if (correspondingDomainFile == null)
@@ -68,10 +71,12 @@ internal class Program
         //TODO: finish catalogupdate!!
         private void CreateFile(CurrentFile domainFile)
         {
-            string targetPath = Path.Combine(_subdomainCatalogManager.BasePath, domainFile.RelativePath);
+            Console.WriteLine("create file method");
+            string srcFileFullPath = Path.Combine(_domainCatalogManager.BasePath, domainFile.RelativePath.Substring(1));
+            string targetPath = Path.Combine(_subdomainCatalogManager.BasePath, domainFile.RelativePath.Substring(1));
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
 
-            using (FileStream sourceStream = new FileStream(domainFile.FullPath, FileMode.Open))
+            using (FileStream sourceStream = new FileStream(srcFileFullPath, FileMode.Open))
             using (FileStream destinationStream = new FileStream(targetPath, FileMode.Create))
             {
                 sourceStream.CopyTo(destinationStream);
@@ -85,17 +90,21 @@ internal class Program
         //TODO: add log line and update object entity to finalize serialization
         private void OverwriteFile(CurrentFile srcFile, CurrentFile destFile)
         {
-            using (FileStream sourceStream = new FileStream(srcFile.FullPath, FileMode.Open))
-            using (FileStream destinationStream = new FileStream(destFile.FullPath, FileMode.Create))
+            string srcFileFullPath = Path.Combine(_domainCatalogManager.BasePath, srcFile.RelativePath.Substring(1));
+            string destFileFullPath = Path.Combine(_subdomainCatalogManager.BasePath, destFile.RelativePath.Substring(1));
+
+            using (FileStream sourceStream = new FileStream(srcFileFullPath, FileMode.Open))
+            using (FileStream destinationStream = new FileStream(destFileFullPath, FileMode.Create))
             {
                 sourceStream.CopyTo(destinationStream);
             }
 
             destFile.Status = FileStatus.Modified;
             destFile.LastModifiedDate = srcFile.LastModifiedDate;
+            LogEvent(destFile);
         }
 
-        //Probably ready method for checking if a file has been removed
+        //Method for checking if a file has been removed
         private void DeletedFile(CurrentFile fileToDelete)
         {
             fileToDelete.Status = FileStatus.Deleted;
@@ -136,7 +145,7 @@ internal class Program
         private string _basePath;
 
         public List<CurrentFile> CurrentFilesList { get { return _currentFiles; } }
-        public string BasePath { get; set; }
+        public string BasePath { get { return _basePath; } set { _basePath = value; } }
 
         public CatalogManager(string basePath)
         {
@@ -146,17 +155,11 @@ internal class Program
             if (File.Exists(catalogFilePath))
             {
                 string jsonString = File.ReadAllText(catalogFilePath);
-                //Console.WriteLine("JSON to deserialize: " + jsonString);
                 _currentFiles = JsonConvert.DeserializeObject<List<CurrentFile>>(jsonString);
                 foreach (CurrentFile file in _currentFiles)
                 {
-                    file.FullPath = Path.Combine(_basePath, file.RelativePath);
+                    file.FullPath = Path.Combine(basePath, file.RelativePath);
                 }
-
-                //if (_currentFiles == null || !_currentFiles.Any())
-                //{
-                //    Console.WriteLine("Deserialization failed or returned empty list.");
-                //}
             }
             else
             {
@@ -207,6 +210,7 @@ internal class Program
         public string RelativePath { get { return _relativePath; } set { _relativePath = value; } }
         public string FileName { get { return _fileName; } set { _fileName = value; } }
         public long FileSize { get { return _fileSize; } set { _fileSize = value; } }
+        [JsonIgnore]
         public string FullPath { get { return _fullPath; } set { _fullPath = value; } }
         public DateTime LastModifiedDate { get { return _lastModifiedDate; } set { _lastModifiedDate = value; } }
         [JsonIgnore]
@@ -216,7 +220,6 @@ internal class Program
         {
         }
 
-        //____Probably this construct doesn't neccessery!! Check it at the end!!
         public CurrentFile(DateTime creationDate, string fullPath, string basePath, string fileName, long fileSize, DateTime lastModified, FileStatus status)
         {
             FileSize = fileSize;
@@ -225,6 +228,7 @@ internal class Program
             FileName = fileName;
             LastModifiedDate = lastModified;
             Status = status;
+            FullPath= fullPath;
         }
 
         private string GetRelativePath(string fullPath, string basePath)
@@ -235,17 +239,6 @@ internal class Program
             }
             return fullPath.Substring(basePath.Length);
         }
-
-        ////Probably not neccessery
-        //public string GetCreationDateInString()
-        //{
-        //    return this.CreationDate.ToString("yyyy.MM.dd");
-        //}
-
-        //public string GetLastModifiedDateInString()
-        //{
-        //    return this.LastModifiedDate.ToString("yyyy.MM.dd");
-        //}
     }
 
     //Short enum to store status for easier catalog making
