@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
+using static Program;
 
 internal class Program
 {
@@ -9,18 +10,6 @@ internal class Program
         string subdomainBasePath = @"C:\Users\skafula\Desktop\Subdomain\SubPath\Test";
         FileManager fileManager = new FileManager(new CatalogManager(domainBasePath), new CatalogManager(subdomainBasePath));
         fileManager.SyncFiles();
-
-        //CatalogManager domainCatalogManager = new CatalogManager(domainBasePath);
-        //CatalogManager subdomainCatalogManager = new CatalogManager(subdomainBasePath);
-
-        //foreach (CurrentFile file in domainCatalogManager.CurrentFilesList)
-        //{
-        //    Console.WriteLine($"FileName: {file.FileName}, CreationDate: {file.CreationDate}, FileSize: {file.FileSize}, LastModifiedDate: {file.LastModifiedDate}, RelativePath: {file.RelativePath}\n");
-        //}
-        //foreach (CurrentFile file in subdomainCatalogManager.CurrentFilesList)
-        //{
-        //    Console.WriteLine($"FileName: {file.FileName}, CreationDate: {file.CreationDate}, FileSize: {file.FileSize}, LastModifiedDate: {file.LastModifiedDate}, RelativePath: {file.RelativePath}\n");
-        //}
     }
     #region FileManager class for doing final operations with file + catalog/log update
 
@@ -29,16 +18,19 @@ internal class Program
         private CatalogManager _domainCatalogManager;
         private CatalogManager _subdomainCatalogManager;
         private string _logPath;
+        private static List<CurrentFile> _subdomainFinalCatalog;
 
         public FileManager(CatalogManager domainCatalogManager, CatalogManager subdomainCatalogManager)
         {
             _domainCatalogManager = domainCatalogManager;
             _subdomainCatalogManager = subdomainCatalogManager;
             _logPath = Path.Combine(subdomainCatalogManager.BasePath, "log.txt");
+            _subdomainFinalCatalog = new List<CurrentFile>();
         }
         //Makes operation/reverse operation to check differences and call neccessery methods
         public void SyncFiles()
         {
+
             foreach (CurrentFile domainFile in _domainCatalogManager.CurrentFilesList)
             {
                 CurrentFile? correspondingSubdomainFile = _subdomainCatalogManager.CurrentFilesList
@@ -46,10 +38,9 @@ internal class Program
 
                 if(correspondingSubdomainFile == null)
                 {
-                    
                     CreateFile(domainFile);
                 }
-                else if (correspondingSubdomainFile.LastModifiedDate != domainFile.LastModifiedDate)
+                else if (correspondingSubdomainFile.LastModifiedDate.ToString("yyyy.MM.dd") != domainFile.LastModifiedDate.ToString("yyyy.MM.dd"))
                 {
                     OverwriteFile(domainFile, correspondingSubdomainFile);
                 }
@@ -66,14 +57,14 @@ internal class Program
                     DeletedFile(subdomainFile);
                 }
             }
+            UpdateCatalog();
         }
         //Method making copy new file 
         //TODO: finish catalogupdate!!
         private void CreateFile(CurrentFile domainFile)
         {
-            Console.WriteLine("create file method");
-            string srcFileFullPath = Path.Combine(_domainCatalogManager.BasePath, domainFile.RelativePath.Substring(1));
-            string targetPath = Path.Combine(_subdomainCatalogManager.BasePath, domainFile.RelativePath.Substring(1));
+            string srcFileFullPath = Path.Combine(_domainCatalogManager.BasePath, domainFile.RelativePath);
+            string targetPath = Path.Combine(_subdomainCatalogManager.BasePath, domainFile.RelativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
 
             using (FileStream sourceStream = new FileStream(srcFileFullPath, FileMode.Open))
@@ -82,6 +73,7 @@ internal class Program
                 sourceStream.CopyTo(destinationStream);
             }
 
+            FileTimestampCorrection(new FileInfo(srcFileFullPath), new FileInfo(targetPath));
             domainFile.Status = FileStatus.Copied;
             _subdomainCatalogManager.CurrentFilesList.Add(domainFile);
         }
@@ -90,8 +82,8 @@ internal class Program
         //TODO: add log line and update object entity to finalize serialization
         private void OverwriteFile(CurrentFile srcFile, CurrentFile destFile)
         {
-            string srcFileFullPath = Path.Combine(_domainCatalogManager.BasePath, srcFile.RelativePath.Substring(1));
-            string destFileFullPath = Path.Combine(_subdomainCatalogManager.BasePath, destFile.RelativePath.Substring(1));
+            string srcFileFullPath = Path.Combine(_domainCatalogManager.BasePath, srcFile.RelativePath);
+            string destFileFullPath = Path.Combine(_subdomainCatalogManager.BasePath, destFile.RelativePath);
 
             using (FileStream sourceStream = new FileStream(srcFileFullPath, FileMode.Open))
             using (FileStream destinationStream = new FileStream(destFileFullPath, FileMode.Create))
@@ -99,6 +91,7 @@ internal class Program
                 sourceStream.CopyTo(destinationStream);
             }
 
+            FileTimestampCorrection(new FileInfo(srcFileFullPath), new FileInfo(destFileFullPath));
             destFile.Status = FileStatus.Modified;
             destFile.LastModifiedDate = srcFile.LastModifiedDate;
             LogEvent(destFile);
@@ -112,9 +105,23 @@ internal class Program
         }
 
         //____Need to check if this method neccessery or not!! Or if it's in the right class?!
-        private void UpdateCatalog(CurrentFile file)
+        private void UpdateCatalog()
         {
+            foreach (CurrentFile file in _domainCatalogManager.CurrentFilesList)
+            {
+                _subdomainFinalCatalog.Add(file);
+            }
+            foreach (CurrentFile file in _subdomainCatalogManager.CurrentFilesList)
+            {
+                if (file.Status == FileStatus.Deleted)
+                {
+                    _subdomainFinalCatalog.Add(file);
+                }
+            }
 
+            string jsonString = JsonConvert.SerializeObject(_subdomainFinalCatalog, new IsoDateTimeConverter { DateTimeFormat = "yyyy.MM.dd" });
+            string catalogFilePath = Path.Combine(_subdomainCatalogManager.BasePath, "catalog.json");
+            File.WriteAllText(catalogFilePath, jsonString);
         }
 
         //Method to update log file depends on the action 
@@ -126,20 +133,20 @@ internal class Program
                 sw.WriteLine(logText);
             }
         }
+        //Changes subdomain copied/overwrited file's Dates to the Original
+        private void FileTimestampCorrection(FileInfo srcFileInfo, FileInfo destFileInfo)
+        {
+
+            destFileInfo.CreationTime = srcFileInfo.CreationTime;
+            destFileInfo.LastWriteTime = srcFileInfo.LastWriteTime;
+        }
     }
     #endregion
-
-    //____Interface for looser dependency (is neccessery?)
-    public interface ICatalogManager
-    {
-        List<CurrentFile> CurrentFilesList { get; }
-        string BasePath { get; }
-    }
 
     #region CatalogManagerClass reading and creating catalog
 
     //Class for read catalog or create catalog depends on the catalog existence
-    public class CatalogManager : ICatalogManager
+    public class CatalogManager
     {
         private List<CurrentFile> _currentFiles;
         private string _basePath;
@@ -233,11 +240,7 @@ internal class Program
 
         private string GetRelativePath(string fullPath, string basePath)
         {
-            if (basePath.EndsWith(@"\"))
-            {
-               basePath = basePath.Remove(basePath.LastIndexOf(@"\"));
-            }
-            return fullPath.Substring(basePath.Length);
+            return fullPath.Substring(basePath.Length+1);
         }
     }
 
